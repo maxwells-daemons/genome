@@ -1,0 +1,38 @@
+[tool.poetry]
+name = "genome"
+version = "0.1.0"
+description = "Training binary neural networks with evolution strategies."
+authors = ["Aidan Swope <aidanswope@gmail.com>"]
+license = "MIT"
+build = "build.py"
+include = ["build.py"]
+
+[tool.poetry.dependencies]
+python = "^3.7"
+numpy = "^1.18.4"
+matplotlib = "^3.2.1"
+jupyter = "^1.0.0"
+ipykernel = "^5.2.1"
+bitarray = "^1.2.1"
+gym = {extras = ["box2d"], version = "^0.17.2"}
+tensorboard-easy = "^0.2.3"
+tensorflow-tensorboard = "^1.5.1"
+scipy = "^1.4.1"
+cffi = "^1.14.0"
+tensorflow = {url = "https://files.pythonhosted.org/packages/f4/28/96efba1a516cdacc2e2d6d081f699c001d414cc8ca3250e6d59ae657eb2b/tensorflow-1.14.0-cp37-cp37m-manylinux1_x86_64.whl"}
+stable-baselines = {extras = ["mpi"], version = "^2.10.0"}
+cython = "^0.29.17"
+tqdm = "^4.46.0"
+
+[tool.poetry.dev-dependencies]
+python-language-server = {version = "^0.31.10", allow-prereleases = true}
+flake8 = {version = "^3.8.0-alpha.2", allow-prereleases = true}
+mypy = {version = "^0.770", allow-prereleases = true}
+black = {version = "^19.10b0", allow-prereleases = true}
+isort = {version = "^4.3.21", allow-prereleases = true}
+neovim = {version = "^0.3.1", allow-prereleases = true}
+pynvim = {version = "^0.4.1", allow-prereleases = true}
+
+[build-system]
+requires = ["poetry>=0.12"]
+build-backend = "poetry.masonry.api"
