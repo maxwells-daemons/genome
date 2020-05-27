@@ -26,6 +26,7 @@ are encoded as binary, and use the sign function as their nonlinearity. Layers c
 In exchange, these networks have an extremely fast forward pass because the dot product of binary-encoded +/-1 
 binary vectors `x` and `y` is `n_bits - popcount(x XOR y)`, which can be computed in just a few clock cycles.
 By baking the subtraction and the bias into the comparison for the sign function, we can speed up inference even more.
+Each activation / weight vector is stored as a `uint64_t`, so memory access is very fast and usage is extremely low. 
 
 #### Natural evolution strategies
 
