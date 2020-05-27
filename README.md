@@ -42,12 +42,6 @@ To train binary networks with NES, I use a separable Bernoulli distribution, par
 a vector of logits. Each generation's update computes the closed-form natural gradient with respect to the
 bit probabilities, and then backpropagates through the sigmoid function to update the logits.
 
-## Note to the CS 179 TAs
-
-The final project will involve GPU-accelerating inference with binary neural networks.
-The file `genome/binary_layers.pyx` implements binary networks and layers on the CPU with Cython, 
-and the final version will include a GPU implementation of the same interface.
-
 ## Building the project
 
 This project uses a Poetry hook to compile some Cython code. 
