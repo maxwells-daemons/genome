@@ -11,7 +11,7 @@ import numpy as np
 
 cimport numpy as np
 from cython.view cimport array as cvarray
-from libc.stdint cimport uint64_t
+from libc.stdint cimport uint64_t, uint16_t
 
 # See: https://gist.github.com/craffel/e470421958cad33df550
 cdef extern int __builtin_popcountll(unsigned long long) nogil
@@ -49,6 +49,18 @@ cdef np.ndarray[np.npy_bool, ndim=1] unpack_bits_64(uint64_t packed):
         result[i] = packed & 0b1
         packed >>= 1
     return result
+
+cpdef uint64_t concat_16bit(uint16_t a, uint16_t b, uint16_t c, uint16_t d):
+    """
+    Concatenate the bit-representations of four uint16_t into a uint64_t.
+    """
+    # Somehow this code block is really pretty
+    return (
+        <uint64_t> a
+        | (<uint64_t> b) << 16
+        | (<uint64_t> c) << 32
+        | (<uint64_t> d) << 48
+    )
 
 
 cdef class BinaryLayer64:
@@ -243,6 +255,30 @@ cdef class BinaryNetwork64:
         self.num_hidden_layers = hidden_layers.shape[0]
         self.output_layer = output_layer
 
+    cpdef np.ndarray[int, ndim=1] forward_raw(self, uint64_t inputs):
+        """
+        Compute a forward pass through the entire model, on pre-packed inputs.
+
+        Parameters
+        ----------
+        inputs : uint64_t
+            A packed 64-vector of binary inputs to the model.
+
+        Returns
+        -------
+        np.ndarray[int, num_outputs]
+            An ndarray of the network's outputs.
+        """
+        # Workaround to call functions without Python lookup overhead.
+        # See: https://stackoverflow.com/questions/31119510/cython-have-sequence-of-
+        #      extension-types-as-attribute-of-another-extension-type
+        cdef BinaryLayer64 layer
+
+        for i in range(self.num_hidden_layers):
+            layer = self.hidden_layers[i]
+            inputs = layer.forward(inputs)
+        return self.output_layer.forward(inputs)
+
     cpdef np.ndarray[int, ndim=1] forward(self, np.npy_bool[:] inputs):
         """
         Compute a forward pass through the entire model.
@@ -257,13 +293,4 @@ cdef class BinaryNetwork64:
         np.ndarray[int, num_outputs]
             An ndarray of the network's outputs.
         """
-        # Workaround to call functions without Python lookup overhead.
-        # See: https://stackoverflow.com/questions/31119510/cython-have-sequence-of-
-        #      extension-types-as-attribute-of-another-extension-type
-        cdef BinaryLayer64 layer
-        cdef uint64_t activation = pack_bits_64(inputs)
-
-        for i in range(self.num_hidden_layers):
-            layer = self.hidden_layers[i]
-            activation = layer.forward(activation)
-        return self.output_layer.forward(activation)
+        return self.forward_raw(pack_bits_64(inputs))

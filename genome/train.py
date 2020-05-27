@@ -1,7 +1,8 @@
 import itertools as it
 import os
 import pickle
-from typing import List, Optional
+import scipy.special
+from typing import List, Optional, Union
 
 import binary_layers
 import matplotlib.pyplot as plt
@@ -136,12 +137,20 @@ def train(
     os.makedirs(ckpt_dir)
     os.makedirs(anim_dir)
 
+    # Some environments directly return a packed vector for efficiency
+    def forward(
+        binary_net: binary_layers.BinaryNetwork64, obs: Union[np.ndarray, np.uint64]
+    ) -> np.ndarray:
+        if env.raw_observation:
+            return binary_net.forward_raw(obs)
+        return binary_net.forward(obs)
+
     def episode(binary_net: binary_layers.BinaryNetwork64) -> float:
         obs = env.reset()
         episode_return = 0
 
         for step in it.count():
-            action = binary_net.forward(obs)
+            action = forward(binary_net, obs)
             obs, reward, done, _ = env.step(action)
             episode_return += reward
 
@@ -157,7 +166,7 @@ def train(
 
         for step in it.count():
             frames.append(env.render(mode="rgb_array"))
-            action = binary_net.forward(obs)
+            action = forward(binary_net, obs)
             obs, reward, done, _ = env.step(action)
 
             if done or (max_episode_steps and step >= max_episode_steps):
@@ -165,11 +174,18 @@ def train(
 
         save_frames_as_gif(frames, os.path.join(anim_dir, f"train_{label}.gif"))
 
+    def log_layer(layer: models.LayerDistribution64, name: str, step: int):
+        probs = scipy.special.expit(layer.weight_logits)
+        variances = probs * (1 - probs)
+        logger.log_histogram(f"{name}/weight_logits", layer.weight_logits, step=step)
+        logger.log_histogram(f"{name}/weight_probs", probs, step=step)
+        logger.log_histogram(f"{name}/weight_vars", variances, step=step)
+
     with tensorboard_easy.Logger(log_dir) as logger:
         for step in tqdm.tqdm(
             range(n_generations) if n_generations else it.count(),
             desc="Training progress",
-            unit=" generations",
+            unit="generation",
             dynamic_ncols=True,
         ):
             evals = step * population_size
@@ -209,25 +225,18 @@ def train(
             logger.log_scalar("map_return", map_return, step=evals)
             logger.log_histogram("sample_returns", returns, step=evals)
 
-            # TODO: plot bias histograms
             for i, layer in enumerate(search_dist.hidden_layers):
-                logger.log_histogram(
-                    f"hidden_{i}_weight_logits", layer.weight_logits, step=evals
-                )
-            logger.log_histogram(
-                f"output_weight_logits",
-                search_dist.output_layer.weight_logits,
-                step=evals,
-            )
+                log_layer(layer, f"hidden_{i}", evals)
+            log_layer(search_dist.output_layer, "output", evals)
 
 
 # TODO: move to a dedicated run script
 if __name__ == "__main__":
-    env = env_wrappers.CartPoleV1()
+    env = env_wrappers.CartPoleV1Bits()
     search_dist = models.NetworkDistribution64(
-        num_hidden_layers=env.action_dims,
-        num_outputs=1,
-        init_weight_logits_std=0,
+        num_hidden_layers=1,
+        num_outputs=env.action_dims,
+        init_weight_logits_std=3,
         use_bias=False,
         fixed_bias_std=1.0,
         init_bias_std=1.0,
@@ -236,7 +245,7 @@ if __name__ == "__main__":
     train(
         search_dist=search_dist,
         env=env,
-        run_name="test-refactor",
+        run_name="profile",
         learning_rate=0.1,
         population_size=256,
         n_generations=100,
