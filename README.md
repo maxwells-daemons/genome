@@ -14,7 +14,7 @@ Binary networks are a great fit for RL because:
  - [Derivative-free optimization is competitive with backpropagation-based algorithms in RL](https://openai.com/blog/evolution-strategies/)
    because the policy gradient is usually available only in expectation, and its Monte-Carlo approximations can be pretty bad.
    This means we can get away with a nondifferentiable model and a black box optimizer.
- - Evolution strategies are [highly parallelizable](https://arxiv.org/abs/1703.03864), 
+ - Evolution strategies are [highly parallelizable](https://arxiv.org/abs/1703.03864),
    and many individual threads / cores can each run a binary neural network with ease.
 
 #### Binary neural networks
@@ -23,18 +23,18 @@ Each layer's weights, inputs, and outputs are constrained to being vectors of +/
 are encoded as binary, and use the sign function as their nonlinearity. Layers compute the function
 ![f(x; W, b) = \text{sign}(W^Tx + b)](https://render.githubusercontent.com/render/math?math=f(x%3B%20W%2C%20b)%20%3D%20%5Ctext%7Bsign%7D(W%5ETx%20%2B%20b)).
 
-In exchange, these networks have an extremely fast forward pass because the dot product of binary-encoded +/-1 
+In exchange, these networks have an extremely fast forward pass because the dot product of binary-encoded +/-1
 binary vectors `x` and `y` is `n_bits - popcount(x XOR y)`, which can be computed in just a few clock cycles.
 By baking the subtraction and the bias into the comparison for the sign function, we can speed up inference even more.
-Each activation / weight vector is stored as a `uint64_t`, so memory access is very fast and usage is extremely low. 
+Each activation / weight vector is stored as a `uint64_t`, so memory access is very fast and usage is extremely low.
 
 #### Natural evolution strategies
 
 [Evolution strategies](https://blog.otoro.net/2017/10/29/visual-evolution-strategies/)
-work by maintaining a *search distribution* over neural networks. 
+work by maintaining a *search distribution* over neural networks.
 At each step, we sample a new population of networks from the distribution, evaluate each, then
 update the search distribution towards the highest-performing samples.
-Natural evolution strategies do this by following the 
+Natural evolution strategies do this by following the
 [natural gradient](https://wiseodd.github.io/techblog/2018/03/14/natural-gradient/) to update
 the search distribution in the direction of highest expected reward.
 
@@ -44,7 +44,7 @@ bit probabilities, and then backpropagates through the sigmoid function to updat
 
 ## Building the project
 
-This project uses a Poetry hook to compile some Cython code. 
+This project uses a Poetry hook to compile some Cython code.
 Running `poetry install` after cloning should build everything correctly.
 
 ## Usage
