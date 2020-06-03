@@ -37,9 +37,6 @@ __global__ void linear_forward(const unsigned int n_chunks,
     }
     __syncthreads();
 
-    // TODO: remove
-    printf("(%d, %d): %u\n", blockIdx.x, threadIdx.x, negatives[threadIdx.x]);
-
     // Then, compute the sum across the block into the first index with a
     // parallel "tree" reduce with sequential addressing
     for (unsigned int active_threads = blockDim.x / 2; active_threads > 0;

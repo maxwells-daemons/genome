@@ -1,16 +1,22 @@
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Tuple
 
-import binary_layers
+import itertools as it
 import numpy as np
 import scipy.special
-from genome import binary_layers_numpy
 
-BinaryLayer = Union[binary_layers.BinaryLayer64, binary_layers.LinearLayer64]
+from genome.binary_networks import inference
+
+# From: https://docs.python.org/3/library/itertools.html
+def pairwise(iterable):
+    "s -> (s0,s1), (s1,s2), (s2, s3), ..."
+    a, b = it.tee(iterable)
+    next(b, None)
+    return zip(a, b)
 
 
-class LayerDistribution64:
+class LayerDistribution:
     """
-    The template for a binary dense layer with 64 units.
+    The template for a binary dense layer.
 
     Represents a probability distribution over the weights and biases of a dense
     layer in a binary neural network. All parameters are independently distributed;
@@ -18,17 +24,14 @@ class LayerDistribution64:
     Can be sampled or binarized to get a binary layer, and trained to shift the
     distribution towards high-performing samples.
 
-    Primarily useful as a component of NetworkDistribution64. Discretizes to either a
-    BinaryLayer64 or a LinearLayer64, depending on whether `output` is set.
+    Primarily useful as a component of NetworkDistribution. Discretizes to LayerParams.
 
     Parameters
     ----------
-    output : bool
-        True if this is an output layer, otherwise False.
-        If it is, then it is linear.
-    num_outputs : Optional[int] (default: None)
-        If `output` is True, the number of outputs for the layer, and must be provided.
-        Otherwise, unused.
+    input_dims : int
+        The number of inputs for this layer.
+    output_dims : int
+        The number of outputs for this layer.
     init_weight_logits_std : float (default: 0)
         The standard deviation used to initialize the weight logits.
         When zero (default), all of the weight logits are initialized to 0.
@@ -42,47 +45,40 @@ class LayerDistribution64:
         If fixed_bias_std is provided, this parameter is unused.
     """
 
-    LAYER_WIDTH = 64
-    EPSILON = 1e-4
+    EPSILON = 0.1
 
-    output: bool
+    input_dims: int
+    output_dims: int
     use_bias: bool
-    num_outputs: int
+    fix_bias_std: bool
+
     weight_logits: np.ndarray
     bias_mean: np.ndarray
     bias_std: np.ndarray
-    fix_bias_std: bool
 
     def __init__(
         self,
-        output: bool,
-        num_outputs: Optional[int] = None,
+        input_dims: int,
+        output_dims: int,
         init_weight_logits_std: float = 0,
         use_bias: bool = False,
         fixed_bias_std: Optional[float] = None,
         init_bias_std: float = 1.0,
     ):
-        self.output = output
+        self.input_dims = input_dims
+        self.output_dims = output_dims
         self.use_bias = use_bias
 
-        if output:
-            assert num_outputs is not None
-            self.num_outputs = num_outputs
-            self.binary_type = binary_layers.LinearLayer64
-        else:
-            self.num_outputs = self.LAYER_WIDTH
-            self.binary_type = binary_layers.BinaryLayer64
-
         self.weight_logits = np.random.normal(
-            0.0, init_weight_logits_std, (self.LAYER_WIDTH, self.num_outputs)
+            0.0, init_weight_logits_std, (self.input_dims, self.output_dims)
         )
 
         if use_bias:
-            self.bias_mean = np.zeros(self.num_outputs)
-            self.bias_std = np.full(self.num_outputs, fixed_bias_std or init_bias_std)
+            self.bias_mean = np.zeros(self.output_dims)
+            self.bias_std = np.full(self.output_dims, fixed_bias_std or init_bias_std)
             self.fix_bias_std = fixed_bias_std is not None
 
-    def sample(self, _as_numpy: bool = False) -> BinaryLayer:
+    def sample(self) -> inference.LayerParams:
         """
         Sample a binary layer from this distribution.
 
@@ -90,17 +86,10 @@ class LayerDistribution64:
         and integer biases from the Gaussian distribution defined by `bias_mean` and
         `bias_std`.
 
-        Parameters
-        ----------
-        _as_numpy : bool (default: False)
-            If True, return a layer implemented in numpy instead of efficient Cython.
-            Used for debugging only.
-
         Returns
         -------
-        BinaryLayer
-            A Cython extension class implementing the sampled layer.
-            Generally only useful as part of a BinaryNetwork64.
+        LayerParams
+            Discrete parameters of the sampled layer.
         """
         probs = scipy.special.expit(self.weight_logits)
         weights = np.random.binomial(1, probs).astype(bool)
@@ -110,49 +99,34 @@ class LayerDistribution64:
                 np.random.normal(self.bias_mean, self.bias_std).round().astype(np.int32)
             )
         else:
-            biases = np.zeros(self.num_outputs, np.int32)
+            biases = np.zeros(self.output_dims, np.int32)
 
-        if _as_numpy:
-            if self.binary_type == binary_layers.LinearLayer64:
-                return binary_layers_numpy.LinearLayer64(weights, biases)
-            return binary_layers_numpy.BinaryLayer64(weights, biases)
-        return self.binary_type.__new__(self.binary_type, weights, biases)
+        return (weights, biases)
 
-    def binarize_maximum_likelihood(self, _as_numpy: bool = False) -> BinaryLayer:
+    def binarize_maximum_likelihood(self) -> inference.LayerParams:
         """
         Compute the maximum-probability binary layer under this distribution.
 
         Deterministically pick weights and biases that maximimize the likelihood under
         this distribution.
 
-        Parameters
-        ----------
-        _as_numpy : bool (default: False)
-            If True, return a layer implemented in numpy instead of efficient Cython.
-            Used for debugging only.
-
         Returns
         -------
-        BinaryLayer
-            A Cython extension class implementing the maximum-likelihood layer.
-            Generally only useful as part of a BinaryNetwork64.
+        LayerParams
+            Discrete parameters of the MAP layer.
         """
         weights = self.weight_logits > 0
         if self.use_bias:
             biases = self.bias_mean.round().astype(np.int32)
         else:
-            biases = np.zeros(self.num_outputs, np.int32)
+            biases = np.zeros(self.output_dims, np.int32)
 
-        if _as_numpy:
-            if self.binary_type == binary_layers.LinearLayer64:
-                return binary_layers_numpy.LinearLayer64(weights, biases)
-            return binary_layers_numpy.BinaryLayer64(weights, biases)
-        return self.binary_type.__new__(self.binary_type, weights, biases)
+        return (weights, biases)
 
     def step(
         self,
         learning_rate: float,
-        samples_and_returns: List[Tuple[BinaryLayer, float]],
+        samples_and_returns: List[Tuple[inference.LayerParams, float]],
         natural_gradient: bool = True,
     ) -> None:
         """
@@ -168,12 +142,13 @@ class LayerDistribution64:
         ----------
         learning_rate : float
             The learning rate to use for this step.
-        samples_and_returns : [(BinaryLayer, float)]
+        samples_and_returns : [(LayerParams, float)]
             A list of each test point and the value it obtained.
         natural_gradient : bool (default: True)
             If True, use the natural gradient update for the weight logits.
             Otherwise, use the plain gradient.
         """
+
         learning_rate /= len(samples_and_returns)
         current_probs = scipy.special.expit(self.weight_logits)
         weight_gradient = np.zeros_like(self.weight_logits)
@@ -186,8 +161,7 @@ class LayerDistribution64:
                 bias_std_gradient = np.zeros_like(self.bias_std)
                 bias_std_cubed = np.power(self.bias_std, 3.0)
 
-        for sample, value in samples_and_returns:
-            weights, biases = sample.get_params()
+        for (weights, biases), value in samples_and_returns:
             weights = weights.astype(float)
             biases = biases.astype(float)
 
@@ -209,6 +183,9 @@ class LayerDistribution64:
         # TODO: try optimizers other than plain SGD
         self.weight_logits += learning_rate * weight_gradient
 
+        # TODO: comment, set as hparam
+        # self.weight_logits *= 0.99
+
         if self.use_bias:
             self.bias_mean += learning_rate * bias_mean_gradient / bias_variance
 
@@ -219,20 +196,19 @@ class LayerDistribution64:
                 )
 
 
-class NetworkDistribution64:
+class NetworkDistribution:
     """
-    The template for a binary neural network with 64-dimensional activations.
+    The template for a binary neural network.
 
     Represents a collection of probability distributions, one for each layer.
     Together this forms a joint distribution over binary networks.
-    Discretizes to a BinaryNetwork64.
+    Discretizes to NetworkParams.
 
     Parameters
     ----------
-    num_hidden_layers : int
-        The number of hidden layers for the network.
-    num_outputs : int
-        The number of integer-valued outputs for the network.
+    layer_dims : [int]
+        A list of all of the widths that will appear in the network. The first element
+        is the input dimensionality, and the last is the number of outputs.
     init_weight_logits_std : float (default: 0)
         The standard deviation used to initialize the weight logits of each
         layer. When zero (default), all of the weight logits are initialized
@@ -248,100 +224,61 @@ class NetworkDistribution64:
     """
 
     use_bias: bool
-    hidden_layers: List[LayerDistribution64]
-    output_layer: LayerDistribution64
+    layers: List[LayerDistribution]
+    layer_dims: List[int]
 
     def __init__(
         self,
-        num_hidden_layers: int,
-        num_outputs: int,
+        layer_dims: List[int],
         init_weight_logits_std: float = 0,
         use_bias: bool = False,
         fixed_bias_std: Optional[float] = None,
         init_bias_std: float = 1,
     ):
-        self.hidden_layers = [
-            LayerDistribution64(
-                output=False,
-                num_outputs=None,
-                init_weight_logits_std=init_weight_logits_std,
-                use_bias=use_bias,
-                fixed_bias_std=fixed_bias_std,
-                init_bias_std=init_bias_std,
+        self.layer_dims = layer_dims
+        self.layers = [
+            LayerDistribution(
+                input_dims,
+                output_dims,
+                init_weight_logits_std,
+                use_bias,
+                fixed_bias_std,
+                init_bias_std,
             )
-            for _ in range(num_hidden_layers)
+            for input_dims, output_dims in pairwise(layer_dims)
         ]
 
-        self.output_layer = LayerDistribution64(
-            output=True,
-            num_outputs=num_outputs,
-            init_weight_logits_std=init_weight_logits_std,
-            use_bias=use_bias,
-            fixed_bias_std=fixed_bias_std,
-            init_bias_std=init_bias_std,
-        )
-
-    def sample(self, _as_numpy: bool = False) -> binary_layers.BinaryNetwork64:
+    def sample(self) -> inference.NetworkParams:
         """
         Sample a binary network from this distribution.
 
         Each layer is sampled independently according to its distribution.
 
-        Parameters
-        ----------
-        _as_numpy : bool (default: False)
-            If True, return a layer implemented in numpy instead of efficient Cython.
-            Used for debugging only.
-
         Returns
         -------
-        BinaryNetwork64
-            A Cython extension class implementing the sampled network.
+        NetworkParams
+            The parameters of this discrete network sample.
         """
-        hidden = [layer.sample(_as_numpy) for layer in self.hidden_layers]
-        output = self.output_layer.sample(_as_numpy)
-        if _as_numpy:
-            return binary_layers_numpy.BinaryNetwork64(hidden, output)
-        return binary_layers.BinaryNetwork64.__new__(
-            binary_layers.BinaryNetwork64,
-            np.array(hidden, dtype=binary_layers.BinaryLayer64),
-            output,
-        )
+        return [layer.sample() for layer in self.layers]
 
-    def binarize_maximum_likelihood(self, _as_numpy: bool = False):
+    def binarize_maximum_likelihood(self):
         """
         Compute the maximum-probability binary network under this distribution.
 
         Works by picking each layer according to the maximum likelihood under its
         distribution.
 
-        Parameters
-        ----------
-        _as_numpy : bool (default: False)
-            If True, return a layer implemented in numpy instead of efficient Cython.
-            Used for debugging only.
-
         Returns
         -------
-        BinaryNetwork64
-            A Cython extension class implementing the sampled network.
+        NetworkParams
+            The parameters of the MAP approximation to this network.
         """
-        hidden = [
-            layer.binarize_maximum_likelihood(_as_numpy) for layer in self.hidden_layers
-        ]
-        output = self.output_layer.binarize_maximum_likelihood(_as_numpy)
-        if _as_numpy:
-            return binary_layers_numpy.BinaryNetwork64(hidden, output)
-        return binary_layers.BinaryNetwork64.__new__(
-            binary_layers.BinaryNetwork64,
-            np.array(hidden, dtype=binary_layers.BinaryLayer64),
-            output,
-        )
+        return [layer.binarize_maximum_likelihood() for layer in self.layers]
 
     def step(
         self,
         learning_rate: float,
-        samples_and_returns: List[Tuple[binary_layers.BinaryNetwork64, float]],
+        samples_and_returns: List[Tuple[inference.NetworkParams, float]],
         natural_gradient: bool = True,
     ) -> None:
         """
@@ -354,25 +291,20 @@ class NetworkDistribution64:
         ----------
         learning_rate : float
             The learning rate to use for this step.
-        samples_and_returns : [(BinaryNetwork64, float)]
+        samples_and_returns : [(NetworkParams, float)]
             A list of each test point and the value it obtained.
         natural_gradient : bool (default: True)
             If True, use the natural gradient update for the weight logits.
             Otherwise, use the plain gradient.
         """
-        # Shape: [num_hidden_layers, num_samples]
-        hidden_layers_and_returns: List[List[binary_layers.BinaryLayer64]] = [[]] * len(
-            self.hidden_layers
-        )
-        output_layers_and_returns = []
-
+        # For every layer, the full batch of discrete samples and returns
+        # Shape: [num_hidden_layers, num_samples][2]
+        layers_and_returns: List[List[Tuple[inference.LayerParams, float]]] = [
+            [] for _ in range(len(self.layers))
+        ]
         for network, ret in samples_and_returns:
-            for i, layer in enumerate(network.hidden_layers):
-                hidden_layers_and_returns[i].append((layer, ret))
-            output_layers_and_returns.append((network.output_layer, ret))
+            for i, layer in enumerate(network):
+                layers_and_returns[i].append((layer, ret))
 
-        for distribution, sample in zip(self.hidden_layers, hidden_layers_and_returns):
-            distribution.step(learning_rate, sample, natural_gradient)
-        self.output_layer.step(
-            learning_rate, output_layers_and_returns, natural_gradient
-        )
+        for distribution, sample_batch in zip(self.layers, layers_and_returns):
+            distribution.step(learning_rate, sample_batch, natural_gradient)

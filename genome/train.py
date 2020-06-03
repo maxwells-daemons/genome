@@ -4,14 +4,15 @@ import pickle
 import scipy.special
 from typing import List, Optional, Union
 
-import binary_layers
 import matplotlib.pyplot as plt
-import models
+import distributions
 import numpy as np
 import tensorboard_easy
 import tqdm
-from genome import env_wrappers
 from matplotlib import animation
+
+from genome import environments
+from genome.binary_networks import inference
 
 OUTPUT_DIR = "./outputs"
 LOG_DIR = "logs"
@@ -87,8 +88,9 @@ def save_frames_as_gif(frames: List[np.ndarray], path: str) -> None:
 
 
 def train(
-    search_dist: models.NetworkDistribution64,
-    env: env_wrappers.BinaryWrapper,
+    search_dist: distributions.NetworkDistribution,
+    inference_strategy: inference.InferenceStrategy,
+    env: environments.BinaryWrapper,
     run_name: str,
     learning_rate: float,
     population_size: int,
@@ -104,11 +106,13 @@ def train(
 
     Parameters
     ----------
-    search_dist : NetworkDistribution64
+    search_dist : NetworkDistribution
         The search distribution to train. Modified in place.
+    inference_strategy : InferenceStrategy
+        Which strategy to use for efficient inference.
     env : BinaryWrapper
         A wrapped gym environment to train on.
-    run_name : str
+    run_name : int
         A name for this training run. Used to create files.
     learning_rate : float
         The learning rate to use.
@@ -137,20 +141,16 @@ def train(
     os.makedirs(ckpt_dir)
     os.makedirs(anim_dir)
 
-    # Some environments directly return a packed vector for efficiency
-    def forward(
-        binary_net: binary_layers.BinaryNetwork64, obs: Union[np.ndarray, np.uint64]
-    ) -> np.ndarray:
-        if env.raw_observation:
-            return binary_net.forward_raw(obs)
-        return binary_net.forward(obs)
+    compiled_network = inference.CompiledNetwork(
+        search_dist.layer_dims, inference_strategy
+    )
 
-    def episode(binary_net: binary_layers.BinaryNetwork64) -> float:
+    def episode() -> float:
         obs = env.reset()
         episode_return = 0
 
         for step in it.count():
-            action = forward(binary_net, obs)
+            action = compiled_network.forward(obs)
             obs, reward, done, _ = env.step(action)
             episode_return += reward
 
@@ -160,21 +160,21 @@ def train(
         return episode_return
 
     # TODO: replace with tensorboard video summaries
-    def animate(binary_net: binary_layers.BinaryNetwork64, label: int) -> None:
+    def animate(label: int) -> None:
         obs = env.reset()
         frames: List[np.ndarray] = []
 
         for step in it.count():
             frames.append(env.render(mode="rgb_array"))
-            action = forward(binary_net, obs)
-            obs, reward, done, _ = env.step(action)
+            action = compiled_network.forward(obs)
+            obs, _, done, _ = env.step(action)
 
             if done or (max_episode_steps and step >= max_episode_steps):
                 break
 
         save_frames_as_gif(frames, os.path.join(anim_dir, f"train_{label}.gif"))
 
-    def log_layer(layer: models.LayerDistribution64, name: str, step: int):
+    def log_layer(layer: distributions.LayerDistribution, name: str, step: int):
         probs = scipy.special.expit(layer.weight_logits)
         variances = probs * (1 - probs)
         logger.log_histogram(f"{name}/weight_logits", layer.weight_logits, step=step)
@@ -191,22 +191,23 @@ def train(
             evals = step * population_size
 
             # Periodically evaluate the MAP network, save gifs, and write checkpoints
-            map_network = search_dist.binarize_maximum_likelihood()
-            map_return = episode(map_network)
+            compiled_network.set_params(search_dist.binarize_maximum_likelihood())
+            map_return = episode()
 
             if render_every and step % render_every == 0:
-                animate(map_network, evals)
+                animate(evals)
 
             if checkpoint_every and step % checkpoint_every == 0:
                 with open(os.path.join(ckpt_dir, f"ckpt_{evals}.pkl"), "wb+") as f:
                     pickle.dump(search_dist, f)
 
             # Sample and evaluate test points
-            test_points = []
+            test_points: List[inference.NetworkParams] = []
             returns = np.empty(population_size)
             for i in range(population_size):
                 point = search_dist.sample()
-                point_return = episode(point)
+                compiled_network.set_params(point)
+                point_return = episode()
                 test_points.append(point)
                 returns[i] = point_return
 
@@ -225,33 +226,33 @@ def train(
             logger.log_scalar("map_return", map_return, step=evals)
             logger.log_histogram("sample_returns", returns, step=evals)
 
-            for i, layer in enumerate(search_dist.hidden_layers):
+            for i, layer in enumerate(search_dist.layers[:-1]):
                 log_layer(layer, f"hidden_{i}", evals)
-            log_layer(search_dist.output_layer, "output", evals)
+            log_layer(search_dist.layers[-1], "output", evals)
 
 
 # TODO: move to a dedicated run script
 if __name__ == "__main__":
-    env = env_wrappers.CartPoleV1Bits()
-    search_dist = models.NetworkDistribution64(
-        num_hidden_layers=1,
-        num_outputs=env.action_dims,
+    env = environments.CartPoleV1()
+    search_dist = distributions.NetworkDistribution(
+        layer_dims=[64, 64, 1],
         init_weight_logits_std=3,
         use_bias=False,
-        fixed_bias_std=1.0,
+        fixed_bias_std=3.0,
         init_bias_std=1.0,
     )
 
     train(
         search_dist=search_dist,
+        inference_strategy=inference.InferenceStrategy.GPU,
         env=env,
-        run_name="profile",
-        learning_rate=0.1,
-        population_size=256,
-        n_generations=100,
+        run_name="demo",
+        learning_rate=0.06,
+        population_size=64,
+        n_generations=None,
         max_episode_steps=None,
         use_natural_gradient=True,
         shape_fitness=False,
         checkpoint_every=None,
-        render_every=None,
+        render_every=20,
     )

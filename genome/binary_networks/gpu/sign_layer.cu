@@ -46,6 +46,7 @@ __global__ void sign_forward(const unsigned int n_chunks,
     // through a chunk index and a bit offset.
     const unsigned int output_chunk = blockIdx.x / CHUNK_BIT;
     const unsigned int output_offset = blockIdx.x % CHUNK_BIT;
+    activations[output_chunk] = 0;
 
     // First, compute the number of -1 summands in the dot product of this
     // thread's chunks of the input and the block's weight column

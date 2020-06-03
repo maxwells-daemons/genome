@@ -1,8 +1,10 @@
+# cython: language_level=3, boundscheck=False, initializedcheck=False
 """
 Provides efficient CPU implementations of binary neural networks and layers.
+These rely on bit arithmetic on uint64_t and so can only have inputs and hidden layers
+of width 64.
 
-BinaryLayer64 and LinearLayer64 both conform to the same general interface
-(with matching constructors, and `forward()` and `get_params()` functions), but
+BinaryLayer64 and LinearLayer64 both conform to the same general interface, but
 are provided separately for efficiency (to avoid dispatch overhead, etc).
 They should be accessed in Python through duck typing.
 """
@@ -22,16 +24,6 @@ cdef uint64_t pack_bits_64(np.npy_bool[:] bits) nogil:
 
     Given a memoryview containing at least 64 bits, return a single uint64_t
     with those bits set.
-
-    Parameters
-    ----------
-    bits : bool[64]
-        A memoryview-compatible array of 64 bits.
-
-    Returns
-    -------
-    uint64_t
-        A uint64_t whose bits are the values provided in `bits`.
     """
     cdef uint64_t result = 0
     for i in range(64):
@@ -70,13 +62,6 @@ cdef class BinaryLayer64:
     This layer has binary weights and integer biases.
     It is intended to be used as a hidden layer.
 
-    Parameters
-    ----------
-    weights : bool[64, 64]
-        The layer's weights, as a memoryview-compatible array of 64x64 bits.
-    biases : int[64]
-        The layer's biases, stored as a memoryview-compatible array of 64 ints.
-
     Notes
     -----
     Computes the activation with this formula:
@@ -91,13 +76,8 @@ cdef class BinaryLayer64:
     cdef int[:] biases
     cdef int thresholds[64]
 
-    def __cinit__(self, np.npy_bool[:, :] weights, int[:] biases):
-        for i in range(64):
-            self.weights[i] = pack_bits_64(weights[:, i])
-            self.biases = biases
-
-            # Biases become precomputed thresholds
-            self.thresholds[i] = (biases[i] >> 1) + 32
+    def __cinit__(self):
+        pass
 
     cpdef uint64_t forward(self, const uint64_t inputs):
         """
@@ -126,25 +106,13 @@ cdef class BinaryLayer64:
 
         return result
 
-    def get_params(self):
-        """
-        Get the parameters of this layer in a Python-readable format.
-
-        Returns
-        -------
-        weights : np.ndarray[(64, 64), bool]
-            The weights of this layer.
-        biases : np.ndarray[64, int32]
-            The biases of this layer.
-        """
-        cdef np.ndarray[np.npy_bool, ndim=2] weights = np.empty((64, 64), dtype="bool")
-        cdef np.ndarray[int, ndim=1] biases = np.empty(64, dtype=np.int32)
+    def set_params(self, tuple params):
+        weights, biases = params
+        self.biases = biases
 
         for i in range(64):
-            weights[:, i] = unpack_bits_64(self.weights[i])
-            biases[i] = self.biases[i]
-
-        return (weights, biases)
+            self.weights[i] = pack_bits_64(weights[:, i])
+            self.thresholds[i] = (biases[i] >> 1) + 32
 
 
 cdef class LinearLayer64:
@@ -174,16 +142,10 @@ cdef class LinearLayer64:
     cdef int[:] biases
     cdef unsigned int num_outputs
 
-    def __cinit__(self, np.npy_bool[:, :] weights, int[:] biases):
-        self.num_outputs = biases.size
-        self.weights = np.empty(self.num_outputs, dtype=np.uint64)
-        self.biases = np.empty(self.num_outputs, dtype=np.int32)
-
-        for i in range(self.num_outputs):
-            self.weights[i] = pack_bits_64(weights[:, i])
-
-            # Precompute offset biases; see `forward` for derivation
-            self.biases[i] = biases[i] + 64
+    def __cinit__(self, unsigned int num_outputs):
+        self.num_outputs = num_outputs
+        self.weights = np.empty(num_outputs, dtype=np.uint64)
+        self.biases = np.empty(num_outputs, dtype=np.int32)
 
     cdef np.ndarray[int, ndim=1] forward(self, const uint64_t inputs):
         """
@@ -209,26 +171,14 @@ cdef class LinearLayer64:
 
         return result
 
-    def get_params(self):
-        """
-        Get the parameters of this layer in a Python-readable format.
-
-        Returns
-        -------
-        weights : np.ndarray[(64, num_outputs), bool]
-            The weights of this layer.
-        biases : np.ndarray[num_outputs, int32]
-            The biases of this layer.
-        """
-        cdef np.ndarray[np.npy_bool, ndim=2] weights = np.empty((64, self.num_outputs),
-                                                                dtype="bool")
-        cdef np.ndarray[int, ndim=1] biases = np.empty(self.num_outputs, dtype="int32")
+    def set_params(self, tuple params):
+        weights, biases = params
 
         for i in range(self.num_outputs):
-            weights[:, i] = unpack_bits_64(self.weights[i])
-            biases[i] = self.biases[i] - 64
+            self.weights[i] = pack_bits_64(weights[:, i])
 
-        return (weights, biases)
+            # Precompute offset biases; see `forward` for derivation
+            self.biases[i] = biases[i] + 64
 
 
 cdef class BinaryNetwork64:
@@ -237,23 +187,17 @@ cdef class BinaryNetwork64:
 
     This network has binary inputs, outputs, and weights, and uses integer biases
     and activations. It uses the sign function as its nonlinearity.
-
-    Parameters
-    ----------
-    hidden_layers : BinaryLayer64[:]
-        A memoryview-compatible array of hidden layers.
-    output_layer : LinearLayer64
-        A linear output layer.
     """
 
-    cdef readonly BinaryLayer64[:] hidden_layers
     cdef readonly unsigned int num_hidden_layers
+    cdef readonly list hidden_layers
     cdef readonly LinearLayer64 output_layer
 
-    def __cinit__(self, BinaryLayer64[:] hidden_layers, LinearLayer64 output_layer):
-        self.hidden_layers = hidden_layers
-        self.num_hidden_layers = hidden_layers.shape[0]
-        self.output_layer = output_layer
+    def __cinit__(self, unsigned int output_dims, unsigned int num_hidden_layers):
+        self.num_hidden_layers = num_hidden_layers
+        self.hidden_layers = [BinaryLayer64.__new__(BinaryLayer64)
+                              for _ in range(num_hidden_layers)]
+        self.output_layer = LinearLayer64.__new__(LinearLayer64, output_dims)
 
     cpdef np.ndarray[int, ndim=1] forward_raw(self, uint64_t inputs):
         """
@@ -294,3 +238,8 @@ cdef class BinaryNetwork64:
             An ndarray of the network's outputs.
         """
         return self.forward_raw(pack_bits_64(inputs))
+
+    def set_params(self, list params):
+        for (layer, param) in zip(self.hidden_layers, params[:-1]):
+            layer.set_params(param)
+        self.output_layer.set_params(params[-1])
