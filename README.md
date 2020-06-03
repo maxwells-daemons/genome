@@ -44,11 +44,20 @@ bit probabilities, and then backpropagates through the sigmoid function to updat
 
 ## Building the project
 
-This project uses a Poetry hook to compile some Cython code.
-Running `poetry install` after cloning should build everything correctly.
+This project has a fairly large number of heterogenous dependencies, making building somewhat of a pain.
+There is a Poetry build hook which should build the whole project by just running `poetry install`.
+The full build chain is:
+
+ - Create device object files for the GPU with `nvcc`.
+ - Transpile `pyx` files into C++ with Cython (which wrap the CUDA code in a Python-accessible way).
+ - Make shared object libraries that can be imported by Python out of the newly-created `cpp` files.
+ - Install any Python dependencies and perform Python module installation tasks.
 
 ## Usage
 
-Right now, there isn't a convenient way to run the code, so I've left run code with some sensible default
-values at the bottom of `genome/train.py`. So, `poetry run python genome/train.py` should train a small
-binary network on CartPole.
+Executing `poetry run python genome/demo.py` will run a demo that trains a small neural network to balance a pole.
+If you're on a graphical system, it should render episodes periodically as the model learns.
+It also dumps logs in `outputs`, which you can inspect with `tensorboard --logdir=outputs` to watch training metrics evolve.
+
+Every run saves its own logs, so they require unique names. If you want to run the same command twice, you can
+delete the old log files under that name, or pick a new name.
