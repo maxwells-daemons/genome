@@ -25,7 +25,6 @@ BinaryNetwork::~BinaryNetwork() {
     free(host_output);
 }
 
-// TODO: remove prints
 int* BinaryNetwork::forward(const unsigned char* host_input) {
     cudaMemcpy(device_input, (const void*)host_input, input_bytes,
                cudaMemcpyHostToDevice);

@@ -100,6 +100,7 @@ def train(
     shape_fitness: bool = False,
     checkpoint_every: Optional[int] = None,
     render_every: Optional[int] = None,
+    save_renders: bool = False,
 ):
     """
     Train a binary network on an OpenAI gym environment.
@@ -131,7 +132,9 @@ def train(
     checkpoint_every : Optional[int] (default: None)
         If provided, checkpoint every `checkpoint_every` generations.
     render_every : Optional[int] (default: None)
-        If provided, save a gif every `render_every` generations.
+        If provided, visualize every `render_every` generations.
+    save_renders : bool (default: False)
+        If True, save rendered scenes as gifs.
     """
     output_dir = os.path.join(OUTPUT_DIR, env.spec.id, run_name)
     log_dir = os.path.join(output_dir, LOG_DIR)
@@ -162,17 +165,23 @@ def train(
     # TODO: replace with tensorboard video summaries
     def animate(label: int) -> None:
         obs = env.reset()
-        frames: List[np.ndarray] = []
+
+        if save_renders:
+            frames: List[np.ndarray] = []
 
         for step in it.count():
-            frames.append(env.render(mode="rgb_array"))
+            frame = env.render(mode="rgb_array")
             action = compiled_network.forward(obs)
             obs, _, done, _ = env.step(action)
+
+            if save_renders:
+                frames.append(frame)
 
             if done or (max_episode_steps and step >= max_episode_steps):
                 break
 
-        save_frames_as_gif(frames, os.path.join(anim_dir, f"train_{label}.gif"))
+        if save_renders:
+            save_frames_as_gif(frames, os.path.join(anim_dir, f"train_{label}.gif"))
 
     def log_layer(layer: distributions.LayerDistribution, name: str, step: int):
         probs = scipy.special.expit(layer.weight_logits)
@@ -185,7 +194,7 @@ def train(
         for step in tqdm.tqdm(
             range(n_generations) if n_generations else it.count(),
             desc="Training progress",
-            unit="generation",
+            unit=" generations",
             dynamic_ncols=True,
         ):
             evals = step * population_size
@@ -229,30 +238,3 @@ def train(
             for i, layer in enumerate(search_dist.layers[:-1]):
                 log_layer(layer, f"hidden_{i}", evals)
             log_layer(search_dist.layers[-1], "output", evals)
-
-
-# TODO: move to a dedicated run script
-if __name__ == "__main__":
-    env = environments.CartPoleV1()
-    search_dist = distributions.NetworkDistribution(
-        layer_dims=[64, 64, 1],
-        init_weight_logits_std=3,
-        use_bias=False,
-        fixed_bias_std=3.0,
-        init_bias_std=1.0,
-    )
-
-    train(
-        search_dist=search_dist,
-        inference_strategy=inference.InferenceStrategy.GPU,
-        env=env,
-        run_name="demo",
-        learning_rate=0.06,
-        population_size=64,
-        n_generations=None,
-        max_episode_steps=None,
-        use_natural_gradient=True,
-        shape_fitness=False,
-        checkpoint_every=None,
-        render_every=20,
-    )
