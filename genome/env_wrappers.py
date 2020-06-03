@@ -123,3 +123,63 @@ class CartPoleV1Bits(BinaryWrapper):
 
     def unbinarize_action(self, binary_action: np.ndarray) -> bool:
         return bool(binary_action[0] > 0)
+
+
+class LunarLanderV2(BinaryWrapper):
+    action_dims = 4
+    raw_observation = False
+
+    # TODO: verify that the log spaces are needed (add both on param?)
+
+    # Bits 0-9 encode X position
+    _x_pos_space = np.concatenate(
+        [-np.geomspace(0.5, 0.05, 4), [0], np.geomspace(0.05, 0.5, 4)]
+    )
+
+    # Bits 10-19 encode Y position
+    _y_pos_space = np.linspace(0.15, 1.4, 9)
+
+    # Bits 20-30 encode X velocity
+    _x_vel_space = np.concatenate([-np.geomspace(1, 0.01, 5), np.geomspace(0.01, 1, 5)])
+
+    # Bits 31-41 encode Y velocity
+    _y_vel_space = np.linspace(-1.5, 1, 10)
+
+    # Bits 42-51 encode angle
+    _angle_space = np.linspace(-1.5, 1.5, 9)
+
+    # Bits 52-61 encode angular velocity
+    _angle_v_space = np.concatenate(
+        [-np.geomspace(1, 0.01, 4), [0], np.geomspace(0.01, 1, 4)]
+    )
+
+    # (and bits 62/63 encode whether the left or right foot was touching)
+
+    def __init__(self):
+        env = gym.make("LunarLander-v2")
+        super(LunarLanderV2, self).__init__(env)
+
+    def binarize_observation(self, observation: np.ndarray) -> np.ndarray:
+        x_pos, y_pos, x_vel, y_vel, angle, angle_v, touch_l, touch_r = observation
+
+        x_pos_i = np.searchsorted(self._x_pos_space, x_pos, side="left")
+        y_pos_i = np.searchsorted(self._y_pos_space, y_pos, side="left") + 10
+        x_vel_i = np.searchsorted(self._x_vel_space, x_vel, side="left") + 20
+        y_vel_i = np.searchsorted(self._y_vel_space, y_vel, side="left") + 31
+        angle_i = np.searchsorted(self._angle_space, angle, side="left") + 42
+        angle_v_i = np.searchsorted(self._angle_v_space, angle_v, side="left") + 52
+
+        discretized = np.zeros(64, bool)
+        discretized[x_pos_i] = True
+        discretized[y_pos_i] = True
+        discretized[x_vel_i] = True
+        discretized[y_vel_i] = True
+        discretized[angle_i] = True
+        discretized[angle_v_i] = True
+        discretized[62] = touch_l
+        discretized[63] = touch_r
+
+        return discretized
+
+    def unbinarize_action(self, binary_action: np.ndarray) -> int:
+        return np.argmax(binary_action)
