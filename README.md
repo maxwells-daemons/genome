@@ -2,7 +2,7 @@
 Binary neural networks have a low memory footprint and run crazy fast.
 Let's use that to speed up reinforcement learning.
 
-For example, this network is 500 bytes and performs 500,000 evaluations/second on my laptop CPU:
+For example, this network is 600 bytes and performs 500,000 evaluations/second on my laptop CPU:
 
 ![Binary Cartpole](resources/cartpole.gif)
 
