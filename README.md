@@ -1,4 +1,6 @@
 # genome
+Read [the writeup on my website](https://aidanswope.com/binary-evolution)!
+
 Binary neural networks have a low memory footprint and run crazy fast.
 Let's use that to speed up reinforcement learning.
 
